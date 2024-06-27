@@ -88,5 +88,3 @@ def apply_weights(m):
     if isinstance(m, nn.Linear):
         torch.nn.init.kaiming_uniform_(m.weight)
         m.bias.data.fill_(0.01)
-
-# class ConvolutionalEncoder(nn.Module):

@@ -1,0 +1,14 @@
+Models:
+- autoencoder:
+    - vanilla autoencoder
+    - VAE
+    - conv AE (soon)
+- watch_your_language:
+    - rnn
+    - gru
+    - lstm
+    - transformer
+- generative:
+    - gans
+    - ddpm
+    - unet?
