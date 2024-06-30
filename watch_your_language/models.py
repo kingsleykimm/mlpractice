@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
+# we need activation layers to create nonlinear neural networks
 class RecurrentLayer(nn.Module):
     def __init__(self, input_size, activation_size, output_size):
         super(RecurrentLayer, self).__init__()
@@ -13,33 +13,39 @@ class RecurrentLayer(nn.Module):
         self.relu = nn.ReLU()
         self.tanh = nn.Tanh()
         self.lin2 = nn.Linear(activation_size, output_size)
-    def forward(self, x, activation):
-        input_plus_activation = torch.concat(x, activation, dim=1) # for batch, need to start at dim 1
-        next_a = self.lin1(input_plus_activation)
-        next_a = self.tanh(next_a)
-        output = self.lin2(next_a)
+    def forward(self, inp, hidden_state):
+        # inp.shape = (batch_size, vocab_size)
+        input_plus_activation = torch.cat(inp, hidden_state, dim=1)
+        next_hidden = self.lin1(input_plus_activation)
+        next_hidden = self.tanh(next_hidden) # (batch_size, hidden_state_size)
+        output = self.lin2(next_hidden)
         output = self.tanh(output)
-        return next_a, output
+        return output, next_hidden
 
-class MultiLayerRNN(nn.Module):
-    # activation is the hidden_dim one
-    def __init__(self, input_size, activation_size, output_size, num_timesteps):
+
+
+class MultiLayerRNN(nn.Module): 
+    # might be unnecessary for our use case + a lot of compute
+    def __init__(self, input_size, activation_size, output_size, num_layers):
         super(MultiLayerRNN, self).__init__()
         self.input_size = input_size
         self.activation_size = activation_size
         self.output_size = output_size
-        self.num_timesteps = num_timesteps
-    
+        self.num_layers = num_layers
+        self.bce_loss = nn.BCELoss()
+        self.mse_loss = nn.MSELoss()
         self.rec_layers = nn.ModuleList([
-            RecurrentLayer(input_size, activation_size, output_size) for _ in range(num_timesteps)
+            RecurrentLayer(input_size, activation_size, output_size) for _ in range(num_layers)
         ])
     def forward(self, x):
-        # should have different functions for different things
+        # flow goes downward and rightward
         pass
     def loss(self, y, y_tilda):
         # y is targ, y_tilda is model output, and we iterate across all timesteps
         # y and y_tilda should be tensors of length num_timesteps
         return F.mse_loss(y, y_tilda)
+    
+
 # to implement : DRNN, BRNN
 class GRU(nn.Module):
     def __init__(self, input_dim, output_dim, c_dim, hidden_dim, num_steps, activation='tanh'):
