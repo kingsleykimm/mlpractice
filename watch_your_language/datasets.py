@@ -5,14 +5,14 @@ import torch
 import math
 from torch.utils.data import Dataset
 # @path should just be the file naem
-def get_file(path='', tokenization='char'):
+def get_file(path=''):
     with open(path) as f:
         text = _preprocess(f.read())
     return text
     
 def word_tokenization(text, min_freq):
     # need to construct the vocab
-    text = text.split()
+    text = text.split(' ')
     counter = collections.Counter(text)
     token_freqs = sorted(counter.items(), key=lambda x: x[1], reverse=True) # sort by highest frequency
     # now we need to get the actual vocab, sorted in alphabetical order
@@ -36,7 +36,7 @@ def _preprocess(text):
 
 # remember to convert to Tensors when outputting
 class PennTreebank(Dataset): # can do dataloader on this
-    def __init__(self, root_dir, path, seq_len, min_freq=5, transform=None):
+    def __init__(self, root_dir, path, seq_len, min_freq=3, transform=None, train_vocab=None):
         self.root_dir = root_dir
         self.path = path
         self.transform = transform
@@ -44,6 +44,9 @@ class PennTreebank(Dataset): # can do dataloader on this
         self.text = get_file(root_dir + path)
         self.token_to_word, self.word_to_token, self.text = word_tokenization(self.text, min_freq)
         self.vocab_size = len(self.word_to_token)
+        if train_vocab: # if in the test case
+            self.token_to_word, self.word_to_token = train_vocab
+            self.vocab_size = len(self.word_to_token)
         # how do we do random sequencing? we don't we do all of them
         self.dataset = []
         for d in range(self.seq_len):
@@ -59,18 +62,24 @@ class PennTreebank(Dataset): # can do dataloader on this
         targ = self.text[i+1:i+1+seq_len]
         # apply padding
         if len(targ) < self.seq_len:
-            targ += ['unk'] * (self.seq_len - len(targ))
+            targ += ['<unk>'] * (self.seq_len - len(targ))
         # convert to tokens, freq-to-token goes from character -> token
         inp = []
         for i in range(len(text)):
             vocab = torch.zeros(self.vocab_size)
-            vocab[self.word_to_token[text[i]]] = 1 # one-hot encoding
+            if text[i] not in self.word_to_token:
+                vocab[self.word_to_token['<unk>']] = 1
+            else:
+                vocab[self.word_to_token[text[i]]] = 1 # one-hot encoding
             inp.append(vocab)
         inp = torch.stack(inp)
         target = []
         for i in range(len(targ)):
             vocab = torch.zeros(self.vocab_size)
-            vocab[self.word_to_token[targ[i]]] = 1
+            if targ[i] not in self.word_to_token:
+                vocab[self.word_to_token['<unk>']] = 1
+            else:
+                vocab[self.word_to_token[targ[i]]] = 1 # one-hot encoding
             target.append(vocab)
         target = torch.stack(target)
         return inp, target

@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# TODO: DRNN (MultiLayer RNN), BRNN (bi-directional RNN)
+
 # we need activation layers to create nonlinear neural networks
 class RecurrentLayer(nn.Module):
     def __init__(self, input_size, activation_size, output_size):
@@ -15,13 +17,12 @@ class RecurrentLayer(nn.Module):
         self.lin2 = nn.Linear(activation_size, output_size)
     def forward(self, inp, hidden_state):
         # inp.shape = (batch_size, vocab_size)
-        input_plus_activation = torch.cat(inp, hidden_state, dim=1)
+        input_plus_activation = torch.cat((inp, hidden_state), 1)
         next_hidden = self.lin1(input_plus_activation)
         next_hidden = self.tanh(next_hidden) # (batch_size, hidden_state_size)
         output = self.lin2(next_hidden)
-        output = self.tanh(output)
+        output = F.softmax(output, dim=1)
         return output, next_hidden
-
 
 
 class MultiLayerRNN(nn.Module): 
@@ -46,7 +47,8 @@ class MultiLayerRNN(nn.Module):
         return F.mse_loss(y, y_tilda)
     
 
-# to implement : DRNN, BRNN
+
+
 class GRU(nn.Module):
     def __init__(self, input_dim, output_dim, c_dim, hidden_dim, num_steps, activation='tanh'):
         super(GRU, self).__init__()
