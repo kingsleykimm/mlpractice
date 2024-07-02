@@ -61,8 +61,6 @@ class PennTreebank(Dataset): # can do dataloader on this
         # need to return the current text and then the next target as well
         targ = self.text[i+1:i+1+seq_len]
         # apply padding
-        if len(targ) < self.seq_len:
-            targ += ['<unk>'] * (self.seq_len - len(targ))
         # convert to tokens, freq-to-token goes from character -> token
         inp = []
         for i in range(len(text)):
@@ -74,6 +72,9 @@ class PennTreebank(Dataset): # can do dataloader on this
             inp.append(vocab)
         inp = torch.stack(inp)
         target = []
+        if len(targ) < self.seq_len:
+            targ += ['<unk>'] * (self.seq_len - len(targ))
+            print(len(targ))
         for i in range(len(targ)):
             vocab = torch.zeros(self.vocab_size)
             if targ[i] not in self.word_to_token:

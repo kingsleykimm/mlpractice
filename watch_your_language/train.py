@@ -1,10 +1,18 @@
 from torch.utils.data import DataLoader
 import torch
-from models import *
+from models import RecurrentLayer, GRU, LSTM
 from datasets import PennTreebank
+import argparse
+from transformer import Transformer
+import torch.nn as nn
+
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        nn.init.kaiming_normal_(m.weight)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
 def evaluate(validate_dataset, vocab_size, model, word_to_token, iteration):
     z = 0
-    validate_batched = []
     perplexity = 0
     for sentence in validate_dataset:
         # calculate perplexity here
@@ -17,7 +25,7 @@ def evaluate(validate_dataset, vocab_size, model, word_to_token, iteration):
                 processed.append('<unk>')
             else:
                 processed.append(word)
-        hidden_state = torch.zeros(1, model.activation_size)
+        hidden_state = torch.zeros(1, model.hidden_dim)
         # processed = torch.Tensor(processed)
         # processed = torch.unsqueeze(processed, 0) # shape is now (1, vocab_size)
         # we need to create the last shape which is now (sentence_length, 1, vocab_size)
@@ -30,6 +38,7 @@ def evaluate(validate_dataset, vocab_size, model, word_to_token, iteration):
         seq = torch.stack(seq)
         seq = torch.unsqueeze(seq, dim=1)
         for i in range(seq.size(dim=0)): # dim = 1 because processed is just (1, vocab_size) (batch_size = 1)
+            print(seq[i].shape, hidden_state.shape)
             probs, hidden_state = model(seq[i], hidden_state)
             z += torch.log(probs[0][word_to_token[processed[i]]])
 
@@ -39,18 +48,9 @@ def evaluate(validate_dataset, vocab_size, model, word_to_token, iteration):
     perplexity /= len(validate_dataset)
     print(f"Perplexity at iteration {iteration} is {perplexity}.")
 
-def custom_ce_loss(pred : torch.Tensor, targ : torch.Tensor):
-    # both are sizes of (batch_size, vocab_size)
-    batch_size = pred.size(dim=0)
-    batch_loss = 0
-    for i in range(batch_size):
-        pred_word, targ_word = pred[i], targ[i]
-        batch_loss += -torch.sum(targ_word @ torch.log(pred_word))
-    return batch_loss / batch_size
 
 
-
-def train_model(num_epochs=500, lr=1e-3, seq_len=5, eval_intervals=100, batch_size=64):
+def train_model(model_name, num_epochs, lr, seq_len, eval_intervals, batch_size):
     train_dataset = PennTreebank('../data/', 'ptbdataset/ptb.train.txt', seq_len)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     vocab_size = train_dataset.vocab_size
@@ -58,30 +58,21 @@ def train_model(num_epochs=500, lr=1e-3, seq_len=5, eval_intervals=100, batch_si
         validate_txt = f.read()
         validate_dataset = validate_txt.split('\n')
     test_dataset = PennTreebank('../data/', 'ptbdataset/ptb.test.txt', seq_len, train_vocab=(train_dataset.token_to_word, train_dataset.word_to_token))
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+    # test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
     # how to handle unseen in test? Just use <unK>
-    model = RecurrentLayer(vocab_size, 10, vocab_size)
+    model = None
+    if model_name == 'lstm':
+        model = LSTM(vocab_size, 32, 32) # tune later
+    elif model_name == 'recurrent':
+        model = RecurrentLayer(vocab_size, 32, vocab_size)
+    elif model_name == 'gru':
+        model = GRU(vocab_size, 32)
+    model.apply(init_weights)
+
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     for i in range(1, num_epochs + 1):
         if i % eval_intervals == 0 and i > 0:
             evaluate(validate_dataset, vocab_size, model, train_dataset.word_to_token, i)
-            # # eval
-            # inputs, targets = next(iter(test_loader))
-            # print("Eval at iteration " + str(i) + ". Loss is on batch size of ", str(64))
-            # inputs = torch.permute(inputs, (1, 0, 2))
-            # targets = torch.permute(targets, (1, 0, 2))
-            # hidden_state = torch.zeros(batch_size, model.activation_size)
-            # loss = 0
-            # sample = []
-            # for i in range(seq_len):
-            #     # print(inputs[i].shape, hidden_state.shape)
-            #     output, hidden_state = model(inputs[i], hidden_state)
-            #     sample.append(output[0])
-            #     loss += F.mse_loss(output, targets[i], reduction='mean')
-            # sample = torch.stack(sample)
-            # sample_phrase = train_dataset.tokens_to_letters(sample)
-            # target_phrase = train_dataset.tokens_to_letters
-            # print("Loss :", loss.item()) # add something here to print out the actual letters
         else:
             inputs, targets = next(iter(train_loader))
             # tmp = inputs[2][3]
@@ -90,15 +81,10 @@ def train_model(num_epochs=500, lr=1e-3, seq_len=5, eval_intervals=100, batch_si
             # print(torch.equal(inputs[3][2], tmp)) check for 
             # inputs and targets will have a shape of (batch_size, num_steps, vocab)
             # switch them to (num_steps, batch_size, vocab) for easier training, because we can iteratively do it per timestep
-            hidden_state = torch.zeros(batch_size, model.activation_size)
-            loss = 0
-            for ind in range(seq_len):
-                output, hidden_state = model(inputs[ind], hidden_state)
-                # targets[i] already contains the one-hot vectors
-                ce_loss = custom_ce_loss(output, targets[ind])
-                loss += ce_loss
+            loss = model.batch_train(inputs, targets, batch_size, seq_len)
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 6) # gradient clipping, find a better way here
             optimizer.step()
             print(f"Epoch {i}, Loss: {loss}")
 
@@ -111,4 +97,13 @@ optimizer.step()
 """
 
 if __name__ == '__main__':
-    train_model()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--num_epochs', type=int, default=100)
+    parser.add_argument('--lr', type=float, default=1e-3)
+    parser.add_argument('--seq_len', type=int, default=5)
+    parser.add_argument('--eval_intervals', type=int, default=100)
+    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--clip', type=int, default=6)
+    parser.add_argument('--model', type=str, default='lstm')
+    args = parser.parse_args()
+    train_model(model_name=args.model, num_epochs=args.num_epochs, lr=args.lr, seq_len=args.seq_len, eval_intervals=args.eval_intervals, batch_size=args.batch_size)
