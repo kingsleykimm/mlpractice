@@ -1,6 +1,6 @@
 from torch.utils.data import DataLoader
 import torch
-from models import RecurrentLayer, GRU, LSTM
+from models import *
 from datasets import PennTreebank
 import argparse
 from transformer import Transformer
@@ -36,14 +36,17 @@ def evaluate(validate_dataset, vocab_size, model, word_to_token, iteration):
             one_hot[token_pos] = 1
             seq.append(one_hot)
         seq = torch.stack(seq)
-        seq = torch.unsqueeze(seq, dim=1)
-        for i in range(seq.size(dim=0)): # dim = 1 because processed is just (1, vocab_size) (batch_size = 1)
-            print(seq[i].shape, hidden_state.shape)
-            probs, hidden_state = model(seq[i], hidden_state)
-            z += torch.log(probs[0][word_to_token[processed[i]]])
-
-        z *= -1
-        z /= vocab_size
+        targets = seq[1:]
+        one_hot_ending = torch.zeros(vocab_size)
+        one_hot_ending[word_to_token['<unk>']] = 1
+        targets = torch.cat((targets, one_hot_ending), dim=0)
+        seq = torch.unsqueeze(seq, dim=1) # seq has size (seq_len, 1, vocab_size)
+        z = model.batch_train(seq, targets, 1, len(processed))
+        # for i in range(seq.size(dim=0)): # dim = 1 because processed is just (1, vocab_size) (batch_size = 1)
+        #     print(seq[i].shape, hidden_state.shape)
+        #     probs, hidden_state = model(seq[i], hidden_state)
+        #     z += torch.log(probs[0][word_to_token[processed[i]]])
+        z /= len(processed)
         perplexity += torch.exp(z)
     perplexity /= len(validate_dataset)
     print(f"Perplexity at iteration {iteration} is {perplexity}.")
@@ -67,6 +70,8 @@ def train_model(model_name, num_epochs, lr, seq_len, eval_intervals, batch_size)
         model = RecurrentLayer(vocab_size, 32, vocab_size)
     elif model_name == 'gru':
         model = GRU(vocab_size, 32)
+    elif model_name == 'birnn':
+        model = BiRNN(vocab_size, 32, 'tanh')
     model.apply(init_weights)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)

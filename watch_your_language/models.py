@@ -30,27 +30,100 @@ class RecurrentLayer(nn.Module):
             output, hidden_state = self.forward(inps[i], hidden_state)
             loss += batch_ce_loss(inps[i], targs[i])
         return loss
-class MultiLayerRNN(nn.Module): 
+class DeepRNN(nn.Module): 
+    '''
+    TODO: Needs to be implemented, 10.3 D2L.ai
+    Only implementing for theory, will be hard for any serious use case since no GPU
+    '''
     # might be unnecessary for our use case + a lot of compute
-    def __init__(self, input_size, activation_size, output_size, num_layers):
-        super(MultiLayerRNN, self).__init__()
-        self.input_size = input_size
-        self.activation_size = activation_size
-        self.output_size = output_size
+    def __init__(self, input_dim, hidden_dim, num_layers):
+        super(DeepRNN, self).__init__()
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
         self.num_layers = num_layers
-        self.bce_loss = nn.BCELoss()
-        self.mse_loss = nn.MSELoss()
+        self.layer = nn.Sequential(
+            nn.Linear(hidden_dim + hidden_dim, hidden_dim),
+            nn.Sigmoid(),
+        )
+        self.out_fc = nn.Linear(hidden_dim, input_dim)
         self.rec_layers = nn.ModuleList([
-            RecurrentLayer(input_size, activation_size, output_size) for _ in range(num_layers)
+            self.layer for _ in range(num_layers)
         ])
-    def forward(self, x):
-        # flow goes downward and rightward
-        pass
+    def forward(self, x, seq_ind):
+        hiddens = []
+        if seq_ind == 0:
+            # pass throguh the initial_hidden
+            hidden = x
+            
+            for i in range(len(self.rec_layers)):
+                hiddens.append(hidden)
+                hidden = self.rec_layers[i](hidden)
+            hiddens = torch.stack(hiddens) # should be (num_layers, hidden_dim)
+            return hiddens
+        else:
+            num_layers = x.size(dim=0)
+            if num_layers != self.num_layers:
+                print("Error: num layers is not equal")
     def loss(self, y, y_tilda):
         # y is targ, y_tilda is model output, and we iterate across all timesteps
         # y and y_tilda should be tensors of length num_timesteps
         return F.mse_loss(y, y_tilda)
     
+class BiRNN(nn.Module):
+    def __init__(self, input_dim : int, hidden_dim : int, activation : str):
+        super(BiRNN, self).__init__()
+        self.input_dim = input
+        self.hidden_dim = hidden_dim
+        self.activation = {
+            'sigmoid' : nn.Sigmoid(),
+            'tanh' : nn.Tanh(),
+            'relu' : nn.ReLU()
+        }
+        self.forward_layer = nn.Sequential(
+            nn.Linear(input_dim + hidden_dim, hidden_dim),
+            self.activation[activation]
+        )
+        self.backward_layer = nn.Sequential(
+            nn.Linear(input_dim + hidden_dim, hidden_dim),
+            self.activation[activation]
+        )
+        self.out_fc1 = nn.Sequential(
+            nn.Linear(hidden_dim * 2, input_dim),
+            self.activation['softmax']
+        )
+
+    def forward_pass(self, inp, forward_hidden):
+        inp_forward_hidden_cat = torch.cat((inp, forward_hidden), dim=1)
+        next_hidden = self.forward_layer(inp_forward_hidden_cat)
+        return next_hidden
+    def backward_pass(self, inp, backward_hidden):
+        inp_backward_hidden_cat = torch.cat((inp, backward_hidden), dim=1)
+        next_hidden = self.forward_layer(inp_backward_hidden_cat)
+        return next_hidden
+    
+    def batch_train(self, inps, targets, batch_size, seq_len):
+        forward_hidden_state = torch.zeros(batch_size, self.hidden_dim)
+        backward_hidden_state = torch.zeros(batch_size, self.hidden_dim)
+        forwards, backwards = [], []
+        for i in range(seq_len):
+            forward_hidden_state = self.forward_pass(inps[i], forward_hidden_state)
+            forwards.append(forward_hidden_state)
+            backward_hidden_state = self.backward_pass(inps[seq_len-i-1], backward_hidden_state)
+            backwards = [backward_hidden_state] + backwards
+        outputs = []
+        loss = 0
+        for i in range(len(forwards)):
+            forward_cat_backward = torch.cat((forwards[i], backwards[i]), dim=1) # across batch-size concat
+            out = self.out_fc1(forward_cat_backward)
+            loss += batch_ce_loss(out, targets[i])
+            outputs.append(out)
+        outputs = torch.stack(outputs)
+        return loss
+
+
+
+
+
 class LSTM(nn.Module):
     """Notes on LSTM:
     The C/internal_state/memory_state is like the main highway that all information flows through, the different gates will have different purposes to modify it,
@@ -79,7 +152,7 @@ class LSTM(nn.Module):
 
         output = F.sigmoid(self.output_gate(input_hidden))
         next_hidden = output * F.tanh(internal_state)
-        out_word = F.sigmoid(self.last_fc1(next_hidden))
+        out_word = F.softmax(self.last_fc1(next_hidden))
         return out_word, next_hidden, internal_state
     def batch_train(self, inps, targets, batch_size, seq_len):
         # hidden states are reset every 'sequence'/epoch to capture new information and train the forget gate
@@ -127,7 +200,7 @@ class GRU(nn.Module):
         candidate_hidden = torch.cat((inp, after_reset), dim=1)
         candidate_hidden = self.candidate_gate(candidate_hidden)
         new_hidden = update * prev_hidden + (torch.ones(self.hidden_dim)-update) * candidate_hidden
-        out = F.sigmoid(self.output(new_hidden))
+        out = F.softmax(self.output(new_hidden))
         return out, new_hidden
     def batch_train(self, inps, targets, batch_size, seq_len):
         loss = 0
