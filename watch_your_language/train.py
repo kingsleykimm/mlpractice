@@ -15,6 +15,7 @@ def evaluate(validate_dataset, vocab_size, model, word_to_token, iteration):
     z = 0
     perplexity = 0
     for sentence in validate_dataset:
+        # validate_dataset is a list of strings
         # calculate perplexity here
         # Perplexity measures how well the model represents the target data
         # Mold data for tensor input into model
@@ -23,32 +24,36 @@ def evaluate(validate_dataset, vocab_size, model, word_to_token, iteration):
         for word in words:
             if word not in word_to_token:
                 processed.append('<unk>')
+            elif word == '\n':
+                processed.append('<end>')
             else:
                 processed.append(word)
+        seq_length = len(processed)
         hidden_state = torch.zeros(1, model.hidden_dim)
         # processed = torch.Tensor(processed)
         # processed = torch.unsqueeze(processed, 0) # shape is now (1, vocab_size)
         # we need to create the last shape which is now (sentence_length, 1, vocab_size)
+
+        # inputs should go up to but not including <end>, targets should include <end> since the inputs need to be able to predict it
         seq = []
-        for i in range(len(processed)):
+        for i in range(seq_length):
             one_hot = torch.zeros(vocab_size)
             token_pos = word_to_token[processed[i]]
             one_hot[token_pos] = 1
             seq.append(one_hot)
         seq = torch.stack(seq)
         targets = seq[1:]
-        one_hot_ending = torch.zeros(vocab_size)
-        one_hot_ending[word_to_token['<unk>']] = 1
-        targets = torch.cat((targets, one_hot_ending), dim=0)
-        seq = torch.unsqueeze(seq, dim=1) # seq has size (seq_len, 1, vocab_size)
-        z = model.batch_train(seq, targets, 1, len(processed))
+        inps = seq[:seq_length - 1]
+        inps = torch.unsqueeze(inps, dim=1) # seq has size (seq_len, 1, vocab_size)
+        targets = torch.unsqueeze(targets, dim=1)
+        z = model.batch_train(inps, targets, 1, seq_length - 1)
         # for i in range(seq.size(dim=0)): # dim = 1 because processed is just (1, vocab_size) (batch_size = 1)
         #     print(seq[i].shape, hidden_state.shape)
         #     probs, hidden_state = model(seq[i], hidden_state)
         #     z += torch.log(probs[0][word_to_token[processed[i]]])
         z /= len(processed)
         perplexity += torch.exp(z)
-    perplexity /= len(validate_dataset)
+    perplexity /= len(word_to_token)
     print(f"Perplexity at iteration {iteration} is {perplexity}.")
 
 
@@ -58,8 +63,7 @@ def train_model(model_name, num_epochs, lr, seq_len, eval_intervals, batch_size)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     vocab_size = train_dataset.vocab_size
     with open('../data/ptbdataset/ptb.valid.txt') as f:
-        validate_txt = f.read()
-        validate_dataset = validate_txt.split('\n')
+        validate_dataset = f.readlines()
     test_dataset = PennTreebank('../data/', 'ptbdataset/ptb.test.txt', seq_len, train_vocab=(train_dataset.token_to_word, train_dataset.word_to_token))
     # test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
     # how to handle unseen in test? Just use <unK>
@@ -72,6 +76,8 @@ def train_model(model_name, num_epochs, lr, seq_len, eval_intervals, batch_size)
         model = GRU(vocab_size, 32)
     elif model_name == 'birnn':
         model = BiRNN(vocab_size, 32, 'tanh')
+    elif model_name == 'drnn':
+        model = DeepRNN(vocab_size, 32, 4)
     model.apply(init_weights)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)

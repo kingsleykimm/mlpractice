@@ -1,8 +1,10 @@
 Models:
-- autoencoder:
+- vision:
     - vanilla autoencoder
     - VAE
     - conv AE (soon)
+    - Alex-Net
+    - Res-Net
 - watch_your_language:
     - rnn
     - gru

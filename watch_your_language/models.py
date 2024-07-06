@@ -41,33 +41,46 @@ class DeepRNN(nn.Module):
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
+        self.initial_linear = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU())
         self.layer = nn.Sequential(
             nn.Linear(hidden_dim + hidden_dim, hidden_dim),
             nn.Sigmoid(),
         )
-        self.out_fc = nn.Linear(hidden_dim, input_dim)
+        self.out_fc = nn.Sequential(nn.Linear(hidden_dim, input_dim), nn.Sigmoid())
         self.rec_layers = nn.ModuleList([
             self.layer for _ in range(num_layers)
         ])
-    def forward(self, x, seq_ind):
+    def forward(self, x, seq_ind, prev_hidden):
         hiddens = []
         if seq_ind == 0:
             # pass throguh the initial_hidden
-            hidden = x
-            
+            hidden = self.initial_linear(x)
             for i in range(len(self.rec_layers)):
+                hidden = self.rec_layers[i](hidden, torch.zeros(self.hidden_dim))
                 hiddens.append(hidden)
-                hidden = self.rec_layers[i](hidden)
             hiddens = torch.stack(hiddens) # should be (num_layers, hidden_dim)
-            return hiddens
+            out = self.out_fc(hidden)
+            return hiddens, out
         else:
             num_layers = x.size(dim=0)
             if num_layers != self.num_layers:
                 print("Error: num layers is not equal")
-    def loss(self, y, y_tilda):
-        # y is targ, y_tilda is model output, and we iterate across all timesteps
-        # y and y_tilda should be tensors of length num_timesteps
-        return F.mse_loss(y, y_tilda)
+                return
+            hidden = self.initial_linear(x)
+            for i in range(len(self.rec_layers)):
+                hidden = self.rec_layers[i](hidden, prev_hidden[i])
+                hiddens.append(hidden)
+            hiddens = torch.stack(hiddens)
+            out = self.out_fc(hidden)
+            return hiddens, out
+    def batch_train(self, inps, targets, batch_size, seq_len):
+        hiddens = None
+        loss = 0
+        for i in range(seq_len):
+            hiddens, out = self.forward(inps[i], i, None)
+            # shape of out is batch_size * vocab_size
+            loss += batch_ce_loss(out, targets[i])
+        return loss
     
 class BiRNN(nn.Module):
     def __init__(self, input_dim : int, hidden_dim : int, activation : str):
@@ -77,7 +90,8 @@ class BiRNN(nn.Module):
         self.activation = {
             'sigmoid' : nn.Sigmoid(),
             'tanh' : nn.Tanh(),
-            'relu' : nn.ReLU()
+            'relu' : nn.ReLU(),
+            'softmax' : nn.Softmax()
         }
         self.forward_layer = nn.Sequential(
             nn.Linear(input_dim + hidden_dim, hidden_dim),
@@ -112,7 +126,7 @@ class BiRNN(nn.Module):
             backwards = [backward_hidden_state] + backwards
         outputs = []
         loss = 0
-        for i in range(len(forwards)):
+        for i in range(seq_len):
             forward_cat_backward = torch.cat((forwards[i], backwards[i]), dim=1) # across batch-size concat
             out = self.out_fc1(forward_cat_backward)
             loss += batch_ce_loss(out, targets[i])
@@ -209,6 +223,34 @@ class GRU(nn.Module):
             hidden_state, out = self.forward(inps[i], hidden_state)
             loss += batch_ce_loss(out, targets[i])
         return loss
+
+class MultiLayerGRU(nn.Module):
+    def __init__(self, input_dim, hidden_dim, num_layers):
+        super(MultiLayerGRU, self).__init__()
+        self.num_layers = num_layers
+        self.layers = nn.ModuleList([
+            GRU(hidden_dim, hidden_dim) for _ in range(num_layers)
+        ])
+        self.initial_linear = nn.Sequential(nn.Linear(input_dim, hidden_dim), nn.ReLU())
+        self.output = nn.Sequential(nn.Linear(hidden_dim, input_dim), nn.Softmax())
+    def forward(self, x, prev_hidden=None):
+        next_hiddens = []
+        if prev_hidden == None:
+            hidden = self.initial_linear(x)
+            for i in range(self.num_layers):
+                out, hidden = self.layers[i](hidden, torch.zeros(self.hidden_dim))
+                next_hiddens.append(hidden)
+            next_hiddens = torch.stack(next_hiddens)
+            out = self.output(hidden)
+            return out, next_hiddens
+        else:
+            hidden = self.initial_linear(x)
+            for i in range(self.num_layers):
+                out, hidden = self.layers[i](hidden, prev_hidden[i])
+                next_hiddens.append(hidden)
+            next_hiddens = torch.stack(next_hiddens)
+            out = self.output(hidden)
+            return out, next_hiddens
 
 
 

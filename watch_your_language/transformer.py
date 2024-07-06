@@ -209,7 +209,7 @@ class Transformer(nn.Module):
     
 
 def init_weights(m):
-    if isinstance(m, nn.Module):
+    if isinstance(m, nn.Linear):
         nn.init.kaiming_normal_(m.weight)
         if m.bias is not None:
             nn.init.constant_(m.bias, 0)
