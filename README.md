@@ -5,7 +5,7 @@ Models:
     - conv AE (soon)
     - Alex-Net
     - Res-Net
-- watch_your_language:
+- language/autoregressive:
     - rnn
     - gru
     - lstm
