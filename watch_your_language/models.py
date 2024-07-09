@@ -56,19 +56,20 @@ class DeepRNN(nn.Module):
             # pass throguh the initial_hidden
             hidden = self.initial_linear(x)
             for i in range(len(self.rec_layers)):
-                hidden = self.rec_layers[i](hidden, torch.zeros(self.hidden_dim))
+                cat_tensor = torch.cat((hidden, torch.zeros(hidden.size(dim=0), self.hidden_dim)), dim=1)
+                hidden = self.rec_layers[i](cat_tensor)
                 hiddens.append(hidden)
             hiddens = torch.stack(hiddens) # should be (num_layers, hidden_dim)
             out = self.out_fc(hidden)
             return hiddens, out
         else:
-            num_layers = x.size(dim=0)
-            if num_layers != self.num_layers:
-                print("Error: num layers is not equal")
-                return
+            # num_layers = prev_hidden.size(dim=0)
+            # if num_layers != self.num_layers:
+            #     print("Error: num layers is not equal")
             hidden = self.initial_linear(x)
             for i in range(len(self.rec_layers)):
-                hidden = self.rec_layers[i](hidden, prev_hidden[i])
+                cat_tensor = torch.cat((hidden, prev_hidden[i]), dim=1)
+                hidden = self.rec_layers[i](cat_tensor)
                 hiddens.append(hidden)
             hiddens = torch.stack(hiddens)
             out = self.out_fc(hidden)
@@ -77,7 +78,7 @@ class DeepRNN(nn.Module):
         hiddens = None
         loss = 0
         for i in range(seq_len):
-            hiddens, out = self.forward(inps[i], i, None)
+            hiddens, out = self.forward(inps[i], i, hiddens)
             # shape of out is batch_size * vocab_size
             loss += batch_ce_loss(out, targets[i])
         return loss
@@ -238,7 +239,8 @@ class MultiLayerGRU(nn.Module):
         if prev_hidden == None:
             hidden = self.initial_linear(x)
             for i in range(self.num_layers):
-                out, hidden = self.layers[i](hidden, torch.zeros(self.hidden_dim))
+                cat_tensor = torch.cat((hidden, torch.zeros(hidden.size(dim=0), self.hidden_dim)), dim=1)
+                out, hidden = self.layers[i](cat_tensor)
                 next_hiddens.append(hidden)
             next_hiddens = torch.stack(next_hiddens)
             out = self.output(hidden)
@@ -246,7 +248,8 @@ class MultiLayerGRU(nn.Module):
         else:
             hidden = self.initial_linear(x)
             for i in range(self.num_layers):
-                out, hidden = self.layers[i](hidden, prev_hidden[i])
+                cat_tensor = torch.cat((hidden, prev_hidden[i]), dim=1)
+                out, hidden = self.layers[i](cat_tensor)
                 next_hiddens.append(hidden)
             next_hiddens = torch.stack(next_hiddens)
             out = self.output(hidden)

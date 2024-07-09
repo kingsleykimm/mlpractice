@@ -2,7 +2,7 @@ from torchvision.datasets import MNIST
 import torch
 from torchvision.transforms import ToTensor
 from torch.utils.data import DataLoader
-from model import VAE
+from vision.autoencoders import VAE
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 def train_model(num_epochs=1000, lr=1e-3):
