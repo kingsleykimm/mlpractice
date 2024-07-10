@@ -32,6 +32,10 @@ def train_model(model_name, num_epochs, lr, eval_intervals, batch_size):
         model = LeNet(len(train_dataset.classes))
     elif model_name == 'alexnet':
         model = AlexNet(len(train_dataset.classes)) # needs to be trained on GPUs/ COLAB
+    elif model_name == 'vgg':
+        model = VGGNet(len(train_dataset.classes), ((1, 16), (1, 32), (2, 64), (2, 128), (2, 128)), True) # TODO: train
+    elif model_name == 'nin':
+        model = NetworkInNetwork(len(train_dataset.classes), True) # TODO: train
     model.to(device)
         # need to upsample all the images
     model.apply(init_weights)

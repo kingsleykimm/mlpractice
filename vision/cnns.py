@@ -181,7 +181,40 @@ class GoogleLeNet(nn.Module):
     and a head (prediction) in a CNN"""
     def __init__(self, num_classes : int):
         super(GoogleLeNet, self).__init__()
-
+        self.stem = nn.Sequential(
+            nn.LazyConv2d(out_channels=64, kernel_size=7, padding=3),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1) # padding for kernel_size - 1 // 2, and stride is to reduce dimensionality by 2
+        )
+        self.body = nn.Sequential(
+            nn.LazyConv2d(out_channels=64, kernel_size=1), nn.ReLU(),
+            nn.LazyConv2d(out_channels=192, kernel_size=3, padding=1), nn.ReLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        )
+        self.head = nn.Sequential(
+            InceptionBlock(64, (96, 128), (16, 32), 32), # we need to downsample the second and third branches because the in_channels=192, so 192->96->128
+            # out_channels is 256
+            InceptionBlock(128, (128, 192), (32, 96), 64),
+            #out_channels = 480
+            nn.MaxPool2d(kernel_size=3, padding=1, stride=2),
+            InceptionBlock(192, (96, 208), (16, 48), 64),
+            InceptionBlock(160, (112, 224), (24, 64), 64),
+            InceptionBlock(128, (128, 256), (24, 64), 64),
+            InceptionBlock(112, (144, 288), (32, 64), 64),
+            InceptionBlock(256, (160, 320), (32, 128), 128),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
+            # fifth module
+            InceptionBlock(256, (160, 320), (32, 128), 128),
+            InceptionBlock(384, (192, 384), (48, 128), 128),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(), # flattens all the output channels
+            nn.LazyLinear(num_classes)
+        )
+        self.net = nn.Sequential(self.stem, self.body, self.head)
+        self.apply(init_weights)
+    def forward(self, imgs):
+        return self.net(imgs)
+    # can implement CE loss later
 class InceptionBlock(nn.Module):
     """Inception block used in GoogleLeNet"""
     def __init__(self, c0, c1, c2, c3, **kwargs): # use the channels of each of the four parallel branches
@@ -207,3 +240,71 @@ class InceptionBlock(nn.Module):
         return torch.cat(
             [self.branch1(imgs), self.branch2(imgs), self.branch3(imgs), self.branch4(imgs)], dim=1
         )
+
+class BatchNorm(nn.Module):
+    """Batch Norm between training and predicting is different.
+    During training, it only uses the statistics of the minibatches, while during """
+    def __init__(self, input_size : tuple): # input_size will be a tuple
+        super(BatchNorm, self).__init__()
+        # if len(input_size) == 2:
+        #     input_size = (1, input_size[1])
+        # elif len(input_size) == 4:
+        #     input_size = (1, input_size[1], 1, 1) # for broadcasting just make it fit to the number of channels
+        self.gamma = nn.Parameter(torch.zeros(*input_size))
+        self.beta = nn.Parameter(torch.ones(*input_size))
+        self.moving_avg, self.moving_var = torch.zeros(*input_size), torch.ones(*input_size)
+        self.epsilon = 1e5
+        self.momentum = 0.1
+    def forward(self, x, predicting):
+        return self.batch_norm(self.epsilon, x, self.gamma, self.beta, predicting, self.momentum)
+
+    def batch_norm(self, epsilon, batch, gamma, beta, predicting, momentum):
+        # gamma and beta are the same size as element in batch
+        # so if we
+        if predicting:
+            # if we're predicting, we're doing it over the entire dataset
+            return gamma * (batch - self.moving_avg) / torch.sqrt(self.moving_var + epsilon) + beta
+        # if we're not in predicting (i.e training), we're going to want to just find the means across the batch_size dim
+        else:
+            mean, var = None, None
+            if len(batch.size) == 2: # i.e fc, (batch_size, fc_layer)
+                mean = torch.mean(batch, dim=0)
+                var = ((batch - mean) ** 2).mean(dim=0) # variance per batch row
+                # apply batch norm equation
+            elif len(batch.size) == 4: # i.e conv (batch_size, num_channels, height, width)
+                mean = torch.mean(batch, dim=(0, 2, 3), keepdim=True) # now mean will be of size (1, channels, 1, 1)
+                var = torch.mean((batch - mean) ** 2, dim=(0, 2, 3), keepdim=True) # broadcasting allows it to just subtract
+            self.moving_avg = self.moving_avg * (1 - momentum) + mean * momentum
+            self.moving_var = self.moving_var * (1 - momentum) + var * momentum
+            batch_normalized = gamma * (batch - mean) / torch.sqrt(var + epsilon) + beta
+            return batch_normalized
+        
+class BatchLeNet(nn.Module):
+    def __init__(self, num_classes):
+        super(BatchLeNet, self).__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=2), # padding = 2 because (kernel_size - 1) / 2
+            BatchNorm((1, 6, 1, 1)),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            nn.Sigmoid()
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(in_channels=6, out_channels=16, kernel_size=5),
+            nn.AvgPool2d(kernel_size=2, stride=2),
+            nn.Sigmoid(),
+        )
+        self.flatten = nn.Flatten()
+        self.fc_layers = nn.Sequential(
+            nn.Linear(400, 120),
+            nn.Sigmoid(),
+            nn.Linear(120, 84),
+            nn.Sigmoid(),
+            nn.Linear(84, num_classes),
+            nn.Softmax()
+        )
+    def forward(self, img):
+        img = self.conv1(img)
+        img = self.conv2(img)
+        img = self.flatten(img)
+        img = self.fc_layers(img)
+        return img
