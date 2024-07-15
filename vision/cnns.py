@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from utils import init_weights, BatchNorm
+from typing import List
 """
 CNN Notes:
 Kernel = moving filter
@@ -11,9 +13,6 @@ Kernel sizes with channels -> (c_i, c_o, k_h, k_w), since each input channel nee
 will sum up the contribution from each of the input channels
 
 """
-def init_weights(m):
-    if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
-        torch.nn.init.xavier_uniform_(m.weight)
 
 class LeNet(nn.Module):
     def __init__(self, num_classes):
@@ -241,65 +240,33 @@ class InceptionBlock(nn.Module):
             [self.branch1(imgs), self.branch2(imgs), self.branch3(imgs), self.branch4(imgs)], dim=1
         )
 
-class BatchNorm(nn.Module):
-    """Batch Norm between training and predicting is different.
-    During training, it only uses the statistics of the minibatches, while during """
-    def __init__(self, input_size : tuple): # input_size will be a tuple
-        super(BatchNorm, self).__init__()
-        # if len(input_size) == 2:
-        #     input_size = (1, input_size[1])
-        # elif len(input_size) == 4:
-        #     input_size = (1, input_size[1], 1, 1) # for broadcasting just make it fit to the number of channels
-        self.gamma = nn.Parameter(torch.zeros(*input_size))
-        self.beta = nn.Parameter(torch.ones(*input_size))
-        self.moving_avg, self.moving_var = torch.zeros(*input_size), torch.ones(*input_size)
-        self.epsilon = 1e5
-        self.momentum = 0.1
-    def forward(self, x, predicting):
-        return self.batch_norm(self.epsilon, x, self.gamma, self.beta, predicting, self.momentum)
 
-    def batch_norm(self, epsilon, batch, gamma, beta, predicting, momentum):
-        # gamma and beta are the same size as element in batch
-        # so if we
-        if predicting:
-            # if we're predicting, we're doing it over the entire dataset
-            return gamma * (batch - self.moving_avg) / torch.sqrt(self.moving_var + epsilon) + beta
-        # if we're not in predicting (i.e training), we're going to want to just find the means across the batch_size dim
-        else:
-            mean, var = None, None
-            if len(batch.size) == 2: # i.e fc, (batch_size, fc_layer)
-                mean = torch.mean(batch, dim=0)
-                var = ((batch - mean) ** 2).mean(dim=0) # variance per batch row
-                # apply batch norm equation
-            elif len(batch.size) == 4: # i.e conv (batch_size, num_channels, height, width)
-                mean = torch.mean(batch, dim=(0, 2, 3), keepdim=True) # now mean will be of size (1, channels, 1, 1)
-                var = torch.mean((batch - mean) ** 2, dim=(0, 2, 3), keepdim=True) # broadcasting allows it to just subtract
-            self.moving_avg = self.moving_avg * (1 - momentum) + mean * momentum
-            self.moving_var = self.moving_var * (1 - momentum) + var * momentum
-            batch_normalized = gamma * (batch - mean) / torch.sqrt(var + epsilon) + beta
-            return batch_normalized
         
 class BatchLeNet(nn.Module):
     def __init__(self, num_classes):
         super(BatchLeNet, self).__init__()
         self.conv1 = nn.Sequential(
             nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=2), # padding = 2 because (kernel_size - 1) / 2
-            BatchNorm((1, 6, 1, 1)),
+            BatchNorm(num_features=6, num_dim=4),
             nn.AvgPool2d(kernel_size=2, stride=2),
             nn.Sigmoid()
         )
         self.conv2 = nn.Sequential(
             nn.Conv2d(in_channels=6, out_channels=16, kernel_size=5),
+            BatchNorm(num_features=16, num_dim=4),
             nn.AvgPool2d(kernel_size=2, stride=2),
             nn.Sigmoid(),
         )
         self.flatten = nn.Flatten()
         self.fc_layers = nn.Sequential(
             nn.Linear(400, 120),
+            BatchNorm(num_features=120, num_dim=2),
             nn.Sigmoid(),
             nn.Linear(120, 84),
+            BatchNorm(num_features=84, num_dim=2),
             nn.Sigmoid(),
             nn.Linear(84, num_classes),
+            BatchNorm(num_features=num_classes, num_dim=2),
             nn.Softmax()
         )
     def forward(self, img):
@@ -308,3 +275,81 @@ class BatchLeNet(nn.Module):
         img = self.flatten(img)
         img = self.fc_layers(img)
         return img
+    
+# Next is DenseNet, which borrowed the ideas of residual connections from ResNet but replaced this with concatentations.
+# Another difference is that there are connections from every layer, making the connections very dense.
+class DenseBlock(nn.Module):
+    def __init__(self, out_channels : int, num_blocks : int):
+        super(DenseBlock, self).__init__()
+        self.blocks = nn.ModuleList([
+            self.make_conv_block(out_channels) for i in range(num_blocks)
+        ])
+    def make_conv_block(self, out_channels : int):
+        return nn.Sequential(
+            nn.LazyConv2d(out_channels=out_channels, kernel_size=3, padding=1),
+            nn.LazyBatchNorm2d(), nn.ReLU(), 
+        )
+    def forward(self, inp):
+        for block in self.blocks:
+            output = block(inp)
+            # conatenate across channel dim, since shape will be (N, COut, H, W)
+            inp = torch.cat((inp, output), dim=1)
+        return inp
+
+
+
+class DenseNet(nn.Module): # don't run training inference on this one, may be too heavy
+    def __init__(self, num_classes : int, num_modules : int = 4):
+        super(DenseNet, self).__init__
+        self.stem = nn.Sequential(
+            nn.LazyConv2d(out_channels=64, kernel_size=7, padding=3, stride=2),
+            nn.LazyBatchNorm2d(), nn.ReLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        )
+        layers = []
+        starting_c = 64
+        for ind in range(num_modules):
+            layers.append(DenseBlock(out_channels=32, num_blocks=4)) # 128 -> 
+            starting_c += 32 * 4
+            layers.append(self.transition_layer(starting_c // 2))
+        self.body = nn.Sequential(*layers)
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(output_size=(1, 1)),
+            nn.Flatten(),
+            # now we do it by number of channels to num of classes
+            nn.LazyLinear(out_features=num_classes)
+        )
+        self.net = nn.Sequential(
+            self.stem, self.body, self.head
+        )
+    def transition_layer(self, num_channels : int): # this is used to control the number of channels, since it compounds with the number of conv_blocks in a DenseBlock
+        return nn.Sequential(
+            nn.LazyConv2d(out_channels=num_channels, kernel_size=1),
+            nn.LazyBatchNorm2d(), nn.ReLU(), nn.AvgPool2d(kernel_size=2, stride=2) # avgpool will halve it
+        )
+    def forward(self, img):
+        return self.net(img)
+    
+# Last one!
+# https://arxiv.org/abs/2003.13678
+class RegNet(nn.Module):
+    def __init__(self, num_classes : int, using_mnist : bool, channels : List[int]):
+        super(RegNet, self).__init__()
+        if using_mnist:
+            self.upsample = nn.Upsample((224, 224))
+        self.stem = nn.Sequential(
+            nn.LazyConv2d(out_channels=channels[0], kernel_size=3, stride=2, padding=1),
+            nn.LazyBatchNorm2d(), nn.ReLU()
+        )
+        body_layers = []
+        for stage in range(4):
+            body_layers.append(self.make_stage(num_channels=channels[stage+1]))
+        self.body = nn.Sequential(*body_layers)
+
+        self.head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(output_size=(1, 1)), nn.Flatten(),
+            nn.LazyLinear(num_classes),
+            nn.Softmax()
+        )
+
+        pass
