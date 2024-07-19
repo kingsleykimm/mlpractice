@@ -1,8 +1,5 @@
-import torch
 import torch.nn as nn
 import torch.functional as F
-from cnns import VGGNet
-from utils import init_weights, BatchNorm
 
 """ResNet originated from the idea of thinking of neural networks as function classes. If we were searching for the function
 f*, which perfectly maps the features X -> labels y, usually neural networks will find the best approximation by minimizing a loss function.
@@ -19,24 +16,21 @@ class ResidualBlock(nn.Module):
     def __init__(self, out_channels : int, stride=1, change_channels : bool = False):
         super(ResidualBlock, self).__init__()
         self.net = nn.Sequential(
-            nn.LazyConv2d(out_channels=out_channels, kernel_size=3, padding=1),
-            BatchNorm(out_channels, num_dim=4),
+            nn.LazyConv2d(out_channels=out_channels, kernel_size=3, padding=1, stride=stride),
+            nn.LazyBatchNorm2d(),
             nn.ReLU(),
             nn.LazyConv2d(out_channels=out_channels, kernel_size=3, padding=1),
-            BatchNorm(out_channels, num_dim=4),
-            nn.ReLU(),
+            nn.LazyBatchNorm2d(),
         )
         self.change_channels = change_channels
         # if we want to use different out_channels from input's channels, do a 1x1 conv (not included here)
         if change_channels:
             self.change_conv = nn.LazyConv2d(out_channels=out_channels, kernel_size=1, stride=stride)
-        self.apply(init_weights)
     def forward(self, inp):
-        residual = inp
         g_x = self.net(inp)
         if self.change_channels:
-            residual = self.change_conv(residual)
-        g_x += residual
+            inp = self.change_conv(inp)
+        g_x += inp
         return F.relu(g_x)
 
 
@@ -49,7 +43,7 @@ class ResNet(nn.Module): # ResNet-18 arch: (2, 64), (2, 128), (2, 256), (2, 512)
 
         self.stem = nn.Sequential(
             nn.LazyConv2d(out_channels=64, kernel_size=7, stride=2, padding=3),
-            BatchNorm(num_features=64, num_dim=4), nn.ReLU(),
+            nn.LazyBatchNorm2d(), nn.ReLU(),
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         )
         # to create one of these
@@ -68,7 +62,6 @@ class ResNet(nn.Module): # ResNet-18 arch: (2, 64), (2, 128), (2, 256), (2, 512)
         self.net = nn.Sequential(
             self.stem, self.body, self.head
         )
-        self.apply(init_weights)
     def create_resnet_block(self, num_blocks, out_channels, first_block):
         blocks = []
         for i in range(num_blocks):
