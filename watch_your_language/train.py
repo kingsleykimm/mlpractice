@@ -6,6 +6,8 @@ import argparse
 from transformer import Transformer
 import torch.nn as nn
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
 def init_weights(m):
     if isinstance(m, nn.Linear):
         nn.init.kaiming_normal_(m.weight)
@@ -85,19 +87,20 @@ def train_model(model_name, num_epochs, lr, seq_len, eval_intervals, batch_size)
         if i % eval_intervals == 0 and i > 0:
             evaluate(validate_dataset, vocab_size, model, train_dataset.word_to_token, i)
         else:
-            inputs, targets = next(iter(train_loader))
-            # tmp = inputs[2][3]
-            inputs = torch.permute(inputs, (1, 0, 2))
-            targets = torch.permute(targets, (1, 0, 2))
-            # print(torch.equal(inputs[3][2], tmp)) check for 
-            # inputs and targets will have a shape of (batch_size, num_steps, vocab)
-            # switch them to (num_steps, batch_size, vocab) for easier training, because we can iteratively do it per timestep
-            loss = model.batch_train(inputs, targets, batch_size, seq_len)
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 6) # gradient clipping, find a better way here
-            optimizer.step()
-            print(f"Epoch {i}, Loss: {loss}")
+            for inputs, targets in train_loader:
+                inputs, targets = inputs.to(device), targets.to(device)
+                # tmp = inputs[2][3]
+                inputs = torch.permute(inputs, (1, 0, 2))
+                targets = torch.permute(targets, (1, 0, 2))
+                # print(torch.equal(inputs[3][2], tmp)) check for 
+                # inputs and targets will have a shape of (batch_size, num_steps, vocab)
+                # switch them to (num_steps, batch_size, vocab) for easier training, because we can iteratively do it per timestep
+                loss = model.batch_train(inputs, targets, batch_size, seq_len)
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 6) # gradient clipping, find a better way here
+                optimizer.step()
+                print(f"Epoch {i}, Loss: {loss}")
 
 # gradient_clipping pattern:
 """

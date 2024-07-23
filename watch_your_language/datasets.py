@@ -8,12 +8,20 @@ from collections import defaultdict
 # @path should just be the file naem
 # TODO: Add in an '<end>' token to signify end, put it at the end of every line, and then don't let any sequences start with the '<end>' token.
 # Add '<end>' token to end of each sentence when training on perplexity
+def _preprocess(text):
+    text = text.replace('\u202f', ' ').replace('\xa0', ' ') # replace nonbreaking space with space
+    no_space = lambda char, prev_char : char in ',.!?' and prev_char != ' ' # char has to be punctuation, and prev_char can't be space
+    # add space in front of punctuation
+    out = [' ' + char if i > 0 and no_space(char, text[i-1]) else char for i, char in enumerate(text.lower())]
+    return ''.join(out)
+
 def get_file(path=''):
+    processed_lines = []
     with open(path) as f:
         lines = f.readlines()
         for line in lines:
-            line = _preprocess(line)
-    return lines
+            processed_lines.append(_preprocess(line))
+    return processed_lines
     
 def word_tokenization(lines, min_freq):
     # need to construct the vocab
@@ -43,11 +51,10 @@ def translation_tokenization(lines, ds_size):
         # split up by tab
         if len(source) == ds_size: break
         parts = line.split('\t')
-        if len(parts) == 2:
-            source.append([t for t in f'{parts[0]} <end>'.split(' ') if t != ''])
-            target.append([token for token in f'<bos> {parts[1]} <end>'.split(' ') if token != '']) # beginning of sequence token for target decoding (transformers), 
-            # the input to the decoder (target sequence) will start with <bos> so it can predict the next actual target token
-    return source, target
+        source.append([t for t in f'{parts[0]}'.split(' ') if t != ''])
+        target.append([token for token in f'<bos> {parts[1]}'.split(' ') if token != '']) # beginning of sequence token for target decoding (transformers), 
+        # the input to the decoder (target sequence) will start with <bos> so it can predict the next actual target token
+    return source, target, ds_size
 
 def fix_seq_len(source, target, seq_len):
     for i in range(len(source)): # ds size
@@ -56,11 +63,12 @@ def fix_seq_len(source, target, seq_len):
             source[i] += ['<pad>' for _ in range(seq_len - len(source[i]))] # padding
         elif len(source[i]) > seq_len:
             source[i] = source[i][:seq_len]# truncation
-
+        source[i].append('<eos>')
         if len(target[i]) < seq_len:
             target[i] += ['<pad>' for _ in range(seq_len - len(target[i]))]
         elif len(target[i]) > seq_len:
             target[i] = target[i][:seq_len]
+        target[i].append('<eos>')
     return source, target
 
 def construct_dictionaries(sentences, min_freq):
@@ -72,12 +80,7 @@ def construct_dictionaries(sentences, min_freq):
     token_to_word = sorted(list(set(['<unk>'] + [x[0] for x in token_freq_list if x[1] >= min_freq])))
     word_to_token = {w : idx for idx, w in enumerate(token_to_word)} # word to index
     return token_to_word, word_to_token
-def _preprocess(text):
-    text = text.replace('\u202f', ' ').replace('\xa0', ' ') # replace nonbreaking space with space
-    no_space = lambda char, prev_char : char in ',.!?' and prev_char != ' ' # char has to be punctuation, and prev_char can't be space
-    # add space in front of punctuation
-    out = [' ' + char if i > 0 and no_space(char, text[i-1]) else char for i, char in enumerate(text.lower())]
-    return ''.join(out)
+
 
 # remember to convert to Tensors when outputting
 class PennTreebank(Dataset): # can do dataloader on this
@@ -141,8 +144,8 @@ class PennTreebank(Dataset): # can do dataloader on this
     
 class MTFraEngDataset(Dataset):
     def __init__(self, min_freq, ds_size, seq_len):
-        lines = get_file('../data/fra-eng/fra.txt')
-        source, target = translation_tokenization(lines, ds_size)
+        lines = get_file('data/fra.txt')
+        source, target, self.ds_size = translation_tokenization(lines, ds_size)
         self.source, self.target = fix_seq_len(source, target, seq_len)
         self.src_token_to_word, self.src_word_to_token = construct_dictionaries(self.source, min_freq)
         self.targ_token_to_word, self.targ_word_to_token = construct_dictionaries(self.target, min_freq)
@@ -150,4 +153,16 @@ class MTFraEngDataset(Dataset):
     def __len__(self):
         return len(self.source)
     def __getitem__(self, index):
-        return self.source[index], self.target[index]
+        src, targ = self.source[index], self.target[index]
+        # just convert them here into the length
+        token_src, token_targ = [], []
+        for i in range(len(src)):
+            zero = torch.zeros(len(self.src_word_to_token))
+            zero[self.src_word_to_token[src[i]]] = 1
+            token_src.append(zero)
+        for i in range(len(targ)):
+            zero = torch.zeros(len(self.targ_word_to_token))
+            zero[self.targ_word_to_token[targ[i]]] = 1
+            token_targ.append(zero)
+        # we're returning a one-hot here of length seq_len
+        return torch.stack(token_src), torch.stack(token_targ)
